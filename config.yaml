@@ -1,0 +1,6 @@
+app:
+  name: "Audara"
+  version: "0.0.2"
+  auth:
+    webapp_url: "http://localhost:3000"
+    token_file: "auth_token.json" 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"mediacontrol/pkg/auth"
 	vk "mediacontrol/pkg/winVirtualKeyCodes"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -63,10 +65,48 @@ func keyPressOnce(keyCode uint16) {
 	log.Printf("ret: %v error: %v", ret, err)
 }
 
+type AppConfig struct {
+	App struct {
+		Name    string `yaml:"name"`
+		Version string `yaml:"version"`
+		Auth    struct {
+			WebappURL string `yaml:"webapp_url"`
+			TokenFile string `yaml:"token_file"`
+		} `yaml:"auth"`
+	} `yaml:"app"`
+}
+
+func loadConfig() (*AppConfig, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := filepath.Join(wd, "config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var config AppConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
 func main() {
+	// Load configuration
+	config, err := loadConfig()
+	if err != nil {
+		log.Printf("Error loading config: %v", err)
+		return
+	}
+
 	// Create a new Fyne application
 	a := app.New()
-	w := a.NewWindow("Media Control")
+	w := a.NewWindow(config.App.Name)
 
 	// Get current working directory
 	wd, err := os.Getwd()
@@ -83,23 +123,48 @@ func main() {
 		w.SetIcon(icon)
 	}
 
-	// Create a label and button
+	// Create a label and buttons
 	label := widget.NewLabel("Media Control 0.1 Testing")
 	playButton := widget.NewButton("Play", func() {
 		keyPressOnce(vk.VK_MEDIA_PLAY_PAUSE)
 	})
 
-	// Create a container with the label and button
+	loginButton := widget.NewButton("Login", func() {
+		// Open the auth URL in browser - this will trigger Clerk's auth flow
+		authURL := config.App.Auth.WebappURL + "/auth/callback"
+		if err := auth.OpenAuthURL(authURL); err != nil {
+			log.Printf("Error opening auth URL: %v", err)
+			return
+		}
+
+		// Wait for auth callback
+		token, err := auth.WaitForAuthCallback(3001)
+		if err != nil {
+			log.Printf("Error during authentication: %v", err)
+			return
+		}
+
+		// Save the token
+		if err := auth.SaveToken(token, config.App.Auth.TokenFile); err != nil {
+			log.Printf("Error saving token: %v", err)
+			return
+		}
+
+		log.Printf("Successfully authenticated")
+	})
+
+	// Create a container with the label and buttons
 	content := container.NewVBox(
 		label,
 		playButton,
+		loginButton,
 	)
 
 	// Set the window content
 	w.SetContent(content)
 
 	// Set window size
-	w.Resize(fyne.NewSize(300, 110))
+	w.Resize(fyne.NewSize(300, 150))
 
 	// Create system tray icon
 	if desk, ok := a.(desktop.App); ok {

@@ -13,6 +13,7 @@ bin/
 *.out
 
 *.log
+auth_token.json
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
