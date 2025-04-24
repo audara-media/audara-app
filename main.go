@@ -142,7 +142,17 @@ func main() {
 	// Function to update UI based on auth state
 	updateUI := func(userData *auth.UserData) {
 		if userData != nil {
-			userInfo.SetText(userData.Username)
+			var displayName string
+			if userData.Profile.FirstName != "" {
+				displayName = userData.Profile.FirstName
+			} else if userData.Username != "" {
+				displayName = userData.Username
+			} else if len(userData.Profile.EmailAddresses) > 0 {
+				displayName = userData.Profile.EmailAddresses[0]
+			} else {
+				displayName = "Logged in"
+			}
+			userInfo.SetText(displayName)
 			authButton.SetText("Logout")
 			authButton.OnTapped = func() {
 				// Delete token file
@@ -220,16 +230,16 @@ func main() {
 
 	// Check for existing token on startup
 	if token, err := auth.LoadToken(config.App.Auth.TokenFile); err == nil {
-		userData, err := auth.VerifyToken(token, config.App.Auth.WebappURL)
-		if err != nil {
-			log.Printf("Error verifying existing token: %v", err)
-			// Delete invalid token
-			if err := os.Remove(config.App.Auth.TokenFile); err != nil {
-				log.Printf("Error removing invalid token file: %v", err)
-			}
-		} else {
-			updateUI(userData)
+		// Create UserData from the token's profile
+		var username string
+		if token.Profile.Username != nil {
+			username = *token.Profile.Username
 		}
+		userData := &auth.UserData{
+			Username: username,
+			Profile:  token.Profile,
+		}
+		updateUI(userData)
 	}
 
 	// Create a container with the label and buttons
