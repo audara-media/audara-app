@@ -129,35 +129,114 @@ func main() {
 		keyPressOnce(vk.VK_MEDIA_PLAY_PAUSE)
 	})
 
-	loginButton := widget.NewButton("Login", func() {
-		// Open the auth URL in browser - this will trigger Clerk's auth flow
-		authURL := config.App.Auth.WebappURL + "/auth/callback"
-		if err := auth.OpenAuthURL(authURL); err != nil {
-			log.Printf("Error opening auth URL: %v", err)
-			return
+	// Create a container for user info and auth button
+	userInfo := widget.NewLabel("")
+	authButton := widget.NewButton("Login", nil)
+	loadingLabel := widget.NewLabel("")
+	loadingLabel.Hide()
+
+	// Declare loginHandler variable
+	var loginHandler func()
+	var cancelAuth func()
+
+	// Function to update UI based on auth state
+	updateUI := func(userData *auth.UserData) {
+		if userData != nil {
+			userInfo.SetText(userData.Username)
+			authButton.SetText("Logout")
+			authButton.OnTapped = func() {
+				// Delete token file
+				if err := os.Remove(config.App.Auth.TokenFile); err != nil {
+					log.Printf("Error removing token file: %v", err)
+				}
+				// Reset UI
+				userInfo.SetText("")
+				authButton.SetText("Login")
+				authButton.OnTapped = loginHandler
+			}
+		} else {
+			userInfo.SetText("")
+			authButton.SetText("Login")
+			authButton.OnTapped = loginHandler
+		}
+	}
+
+	// Define login handler function
+	loginHandler = func() {
+		// Start the auth process
+		resultChan, cancel := auth.StartAuthProcess(config.App.Auth.WebappURL, 3001)
+		cancelAuth = cancel
+
+		// Update UI to show loading state
+		loadingLabel.SetText("Opening browser...")
+		loadingLabel.Show()
+		authButton.SetText("Cancel")
+		authButton.OnTapped = func() {
+			if cancelAuth != nil {
+				cancelAuth()
+				cancelAuth = nil
+			}
+			// Reset UI
+			loadingLabel.Hide()
+			authButton.SetText("Login")
+			authButton.OnTapped = loginHandler
 		}
 
-		// Wait for auth callback
-		token, err := auth.WaitForAuthCallback(3001)
+		// Handle auth result in a goroutine
+		go func() {
+			result := <-resultChan
+
+			// Reset UI first
+			loadingLabel.Hide()
+			authButton.SetText("Login")
+			authButton.OnTapped = loginHandler
+
+			if result.Error != nil {
+				log.Printf("Authentication error: %v", result.Error)
+				return
+			}
+
+			// Save the token
+			if err := auth.SaveToken(result.Token, config.App.Auth.TokenFile); err != nil {
+				log.Printf("Error saving token: %v", err)
+				return
+			}
+
+			// Verify token and get user data
+			userData, err := auth.VerifyToken(result.Token, config.App.Auth.WebappURL)
+			if err != nil {
+				log.Printf("Error verifying token: %v", err)
+				return
+			}
+
+			// Update UI with user data
+			updateUI(userData)
+			log.Printf("Successfully authenticated")
+		}()
+	}
+
+	// Set initial auth button handler
+	authButton.OnTapped = loginHandler
+
+	// Check for existing token on startup
+	if token, err := auth.LoadToken(config.App.Auth.TokenFile); err == nil {
+		userData, err := auth.VerifyToken(token, config.App.Auth.WebappURL)
 		if err != nil {
-			log.Printf("Error during authentication: %v", err)
-			return
+			log.Printf("Error verifying existing token: %v", err)
+			// Delete invalid token
+			if err := os.Remove(config.App.Auth.TokenFile); err != nil {
+				log.Printf("Error removing invalid token file: %v", err)
+			}
+		} else {
+			updateUI(userData)
 		}
-
-		// Save the token
-		if err := auth.SaveToken(token, config.App.Auth.TokenFile); err != nil {
-			log.Printf("Error saving token: %v", err)
-			return
-		}
-
-		log.Printf("Successfully authenticated")
-	})
+	}
 
 	// Create a container with the label and buttons
 	content := container.NewVBox(
 		label,
 		playButton,
-		loginButton,
+		container.NewHBox(userInfo, loadingLabel, authButton),
 	)
 
 	// Set the window content
