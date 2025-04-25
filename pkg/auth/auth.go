@@ -49,7 +49,6 @@ var (
 	rnd                = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
-// generateShortCode creates a random 6-character string for request matching
 func generateShortCode() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 6)
@@ -60,13 +59,8 @@ func generateShortCode() string {
 }
 
 func OpenAuthURL(url string) (string, error) {
-	// Generate a short code for request matching
 	defcode := generateShortCode()
-
-	// Add the defcode to the URL
 	authURL := url + "?defcode=" + defcode
-
-	// Open default browser with the auth URL
 	return defcode, openBrowser(authURL)
 }
 
@@ -79,11 +73,9 @@ func WaitForAuthCallback(port int, webappURL string, defcode string) (*TokenResp
 	callbackRegistered = true
 	callbackMutex.Unlock()
 
-	// Create channels for token and error
 	tokenChan := make(chan *TokenResponse)
 	errorChan := make(chan error)
 
-	// Start long-polling for token
 	go func() {
 		client := &http.Client{
 			Timeout: 60 * time.Second,
@@ -116,7 +108,6 @@ func WaitForAuthCallback(port int, webappURL string, defcode string) (*TokenResp
 		tokenChan <- &token
 	}()
 
-	// Wait for either the token or an error
 	select {
 	case token := <-tokenChan:
 		return token, nil
@@ -126,13 +117,11 @@ func WaitForAuthCallback(port int, webappURL string, defcode string) (*TokenResp
 }
 
 func SaveToken(token *TokenResponse, tokenFile string) error {
-	// Create the directory if it doesn't exist
 	dir := filepath.Dir(tokenFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	// Save the token to file
 	data, err := json.Marshal(token)
 	if err != nil {
 		return err
@@ -200,7 +189,6 @@ func VerifyToken(token *TokenResponse, webappURL string) (*UserData, error) {
 	return &userData, nil
 }
 
-// resetCallbackRegistration resets the callback registration flag
 func resetCallbackRegistration() {
 	callbackMutex.Lock()
 	callbackRegistered = false
@@ -212,7 +200,6 @@ func StartAuthProcess(webappURL string, port int) (chan AuthResult, func()) {
 	done := make(chan struct{})
 
 	go func() {
-		// Open the auth URL in browser and get the defcode
 		defcode, err := OpenAuthURL(webappURL + "/auth/callback")
 		if err != nil {
 			resetCallbackRegistration()
@@ -220,7 +207,6 @@ func StartAuthProcess(webappURL string, port int) (chan AuthResult, func()) {
 			return
 		}
 
-		// Wait for auth callback
 		token, err := WaitForAuthCallback(port, webappURL, defcode)
 		if err != nil {
 			resetCallbackRegistration()
@@ -228,16 +214,13 @@ func StartAuthProcess(webappURL string, port int) (chan AuthResult, func()) {
 			return
 		}
 
-		// Check if token is nil
 		if token == nil {
 			resetCallbackRegistration()
 			resultChan <- AuthResult{Error: fmt.Errorf("received nil token")}
 			return
 		}
 
-		// Verify the token
 		if _, err := VerifyToken(token, webappURL); err != nil {
-			// If we get a 403, don't write the token file
 			if strings.Contains(err.Error(), "403") {
 				resetCallbackRegistration()
 				resultChan <- AuthResult{Error: fmt.Errorf("authentication failed: %v", err)}
@@ -248,7 +231,6 @@ func StartAuthProcess(webappURL string, port int) (chan AuthResult, func()) {
 			return
 		}
 
-		// Save the token
 		if err := SaveToken(token, "auth_token.json"); err != nil {
 			resetCallbackRegistration()
 			resultChan <- AuthResult{Error: err}
@@ -259,7 +241,6 @@ func StartAuthProcess(webappURL string, port int) (chan AuthResult, func()) {
 		resultChan <- AuthResult{Token: token}
 	}()
 
-	// Return the result channel and a cancel function
 	return resultChan, func() {
 		resetCallbackRegistration()
 		close(done)

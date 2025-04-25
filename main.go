@@ -23,19 +23,16 @@ var (
 )
 
 func init() {
-	// Get current working directory
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
 
-	// Create log file
 	logFile, err := os.OpenFile(filepath.Join(wd, "mediacontrol.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		panic(err)
 	}
 
-	// Set log output to file
 	log.SetOutput(logFile)
 }
 
@@ -97,25 +94,21 @@ func loadConfig() (*AppConfig, error) {
 }
 
 func main() {
-	// Load configuration
 	config, err := loadConfig()
 	if err != nil {
 		log.Printf("Error loading config: %v", err)
 		return
 	}
 
-	// Create a new Fyne application
 	a := app.New()
 	w := a.NewWindow(config.App.Name)
 
-	// Get current working directory
 	wd, err := os.Getwd()
 	if err != nil {
 		log.Printf("Error getting working directory: %v", err)
 	}
 
-	// Load and set the icon
-	iconPath := filepath.Join(wd, "icon.png")
+	iconPath := filepath.Join(wd, "temp-play.png")
 	icon, err := fyne.LoadResourceFromPath(iconPath)
 	if err != nil {
 		log.Printf("Error loading icon: %v", err)
@@ -123,61 +116,58 @@ func main() {
 		w.SetIcon(icon)
 	}
 
-	// Create a label and buttons
-	label := widget.NewLabel("Media Control 0.1 Testing")
+	label := widget.NewLabel("Audara Pre-MVP baby")
 	playButton := widget.NewButton("Play", func() {
 		keyPressOnce(vk.VK_MEDIA_PLAY_PAUSE)
 	})
+	playButton.Disable()
 
-	// Create a container for user info and auth button
 	userInfo := widget.NewLabel("")
 	authButton := widget.NewButton("Login", nil)
 	loadingLabel := widget.NewLabel("")
 	loadingLabel.Hide()
 
-	// Declare loginHandler variable
 	var loginHandler func()
 	var cancelAuth func()
 
-	// Function to update UI based on auth state
 	updateUI := func(userData *auth.UserData) {
-		if userData != nil {
-			var displayName string
-			if userData.Profile.FirstName != "" {
-				displayName = userData.Profile.FirstName
-			} else if userData.Username != "" {
-				displayName = userData.Username
-			} else if len(userData.Profile.EmailAddresses) > 0 {
-				displayName = userData.Profile.EmailAddresses[0]
-			} else {
-				displayName = "Logged in"
-			}
-			userInfo.SetText(displayName)
-			authButton.SetText("Logout")
-			authButton.OnTapped = func() {
-				// Delete token file
-				if err := os.Remove(config.App.Auth.TokenFile); err != nil {
-					log.Printf("Error removing token file: %v", err)
+		fyne.Do(func() {
+			if userData != nil {
+				var displayName string
+				if userData.Profile.FirstName != "" {
+					displayName = userData.Profile.FirstName
+				} else if userData.Username != "" {
+					displayName = userData.Username
+				} else if len(userData.Profile.EmailAddresses) > 0 {
+					displayName = userData.Profile.EmailAddresses[0]
+				} else {
+					displayName = "Logged in"
 				}
-				// Reset UI
+				userInfo.SetText(displayName)
+				authButton.SetText("Logout")
+				playButton.Enable()
+				authButton.OnTapped = func() {
+					if err := os.Remove(config.App.Auth.TokenFile); err != nil {
+						log.Printf("Error removing token file: %v", err)
+					}
+					userInfo.SetText("")
+					authButton.SetText("Login")
+					playButton.Disable()
+					authButton.OnTapped = loginHandler
+				}
+			} else {
 				userInfo.SetText("")
 				authButton.SetText("Login")
+				playButton.Disable()
 				authButton.OnTapped = loginHandler
 			}
-		} else {
-			userInfo.SetText("")
-			authButton.SetText("Login")
-			authButton.OnTapped = loginHandler
-		}
+		})
 	}
 
-	// Define login handler function
 	loginHandler = func() {
-		// Start the auth process
 		resultChan, cancel := auth.StartAuthProcess(config.App.Auth.WebappURL, 3001)
 		cancelAuth = cancel
 
-		// Update UI to show loading state
 		loadingLabel.SetText("Opening browser...")
 		loadingLabel.Show()
 		authButton.SetText("Cancel")
@@ -186,51 +176,45 @@ func main() {
 				cancelAuth()
 				cancelAuth = nil
 			}
-			// Reset UI
+
 			loadingLabel.Hide()
 			authButton.SetText("Login")
 			authButton.OnTapped = loginHandler
 		}
 
-		// Handle auth result in a goroutine
 		go func() {
 			result := <-resultChan
 
-			// Reset UI first
-			loadingLabel.Hide()
-			authButton.SetText("Login")
-			authButton.OnTapped = loginHandler
+			fyne.Do(func() {
+				loadingLabel.Hide()
+				authButton.SetText("Login")
+				authButton.OnTapped = loginHandler
+			})
 
 			if result.Error != nil {
 				log.Printf("Authentication error: %v", result.Error)
 				return
 			}
 
-			// Save the token
 			if err := auth.SaveToken(result.Token, config.App.Auth.TokenFile); err != nil {
 				log.Printf("Error saving token: %v", err)
 				return
 			}
 
-			// Verify token and get user data
 			userData, err := auth.VerifyToken(result.Token, config.App.Auth.WebappURL)
 			if err != nil {
 				log.Printf("Error verifying token: %v", err)
 				return
 			}
 
-			// Update UI with user data
 			updateUI(userData)
 			log.Printf("Successfully authenticated")
 		}()
 	}
 
-	// Set initial auth button handler
 	authButton.OnTapped = loginHandler
 
-	// Check for existing token on startup
 	if token, err := auth.LoadToken(config.App.Auth.TokenFile); err == nil {
-		// Create UserData from the token's profile
 		var username string
 		if token.Profile.Username != nil {
 			username = *token.Profile.Username
@@ -239,29 +223,27 @@ func main() {
 			Username: username,
 			Profile:  token.Profile,
 		}
-		updateUI(userData)
+		fyne.Do(func() {
+			updateUI(userData)
+			playButton.Enable()
+		})
 	}
 
-	// Create a container with the label and buttons
 	content := container.NewVBox(
 		label,
-		playButton,
 		container.NewHBox(userInfo, loadingLabel, authButton),
+		playButton,
 	)
 
-	// Set the window content
 	w.SetContent(content)
-
-	// Set window size
 	w.Resize(fyne.NewSize(300, 150))
 
-	// Create system tray icon
 	if desk, ok := a.(desktop.App); ok {
-		menu := fyne.NewMenu("Media Control",
-			fyne.NewMenuItem("Show", func() {
+		menu := fyne.NewMenu("Audara",
+			fyne.NewMenuItem("Open App", func() {
 				w.Show()
 			}),
-			fyne.NewMenuItem("Quit", func() {
+			fyne.NewMenuItem("Exit", func() {
 				a.Quit()
 			}),
 		)
@@ -271,9 +253,6 @@ func main() {
 		}
 	}
 
-	// Hide the window initially
 	w.Hide()
-
-	// Show and run the application
 	w.ShowAndRun()
 }
