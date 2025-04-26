@@ -207,6 +207,11 @@ func main() {
 				return
 			}
 
+			// If verification didn't return profile data, use the token's profile
+			if userData.Profile.FirstName == "" {
+				userData.Profile = result.Token.Profile
+			}
+
 			updateUI(userData)
 			log.Printf("Successfully authenticated")
 		}()
