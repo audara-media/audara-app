@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"mediacontrol/pkg/auth"
+	"mediacontrol/pkg/websocket"
 	vk "mediacontrol/pkg/winVirtualKeyCodes"
 	"os"
 	"path/filepath"
@@ -129,6 +130,7 @@ func main() {
 
 	var loginHandler func()
 	var cancelAuth func()
+	var wsClient *websocket.Client
 
 	updateUI := func(userData *auth.UserData) {
 		fyne.Do(func() {
@@ -147,6 +149,10 @@ func main() {
 				authButton.SetText("Logout")
 				playButton.Enable()
 				authButton.OnTapped = func() {
+					if wsClient != nil {
+						wsClient.Close()
+						wsClient = nil
+					}
 					if err := os.Remove(config.App.Auth.TokenFile); err != nil {
 						log.Printf("Error removing token file: %v", err)
 					}
@@ -212,6 +218,12 @@ func main() {
 				userData.Profile = result.Token.Profile
 			}
 
+			// Initialize WebSocket client
+			wsClient = websocket.NewClient(config.App.Auth.WebappURL, result.Token.SessionToken)
+			if err := wsClient.Connect(); err != nil {
+				log.Printf("Error connecting to WebSocket: %v", err)
+			}
+
 			updateUI(userData)
 			log.Printf("Successfully authenticated")
 		}()
@@ -232,6 +244,12 @@ func main() {
 			updateUI(userData)
 			playButton.Enable()
 		})
+
+		// Initialize WebSocket client for existing token
+		wsClient = websocket.NewClient(config.App.Auth.WebappURL, token.SessionToken)
+		if err := wsClient.Connect(); err != nil {
+			log.Printf("Error connecting to WebSocket: %v", err)
+		}
 	}
 
 	content := container.NewVBox(
