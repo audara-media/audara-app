@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"log"
 	"mediacontrol/pkg/auth"
 	"mediacontrol/pkg/websocket"
@@ -21,9 +23,12 @@ import (
 var (
 	user32        = syscall.NewLazyDLL("user32.dll")
 	sendInputProc = user32.NewProc("SendInput")
+	consoleLog    = flag.Bool("console", false, "Enable console logging")
 )
 
 func init() {
+	flag.Parse()
+
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(err)
@@ -34,7 +39,12 @@ func init() {
 		panic(err)
 	}
 
-	log.SetOutput(logFile)
+	if *consoleLog {
+		multiWriter := io.MultiWriter(os.Stdout, logFile)
+		log.SetOutput(multiWriter)
+	} else {
+		log.SetOutput(logFile)
+	}
 }
 
 func keyPressOnce(keyCode uint16) {
@@ -55,12 +65,16 @@ func keyPressOnce(keyCode uint16) {
 	var i input
 	i.inputType = 1 //INPUT_KEYBOARD
 	i.ki.wVk = keyCode
-	ret, _, err := sendInputProc.Call(
+	ret, _, _ := sendInputProc.Call(
 		uintptr(1),
 		uintptr(unsafe.Pointer(&i)),
 		uintptr(unsafe.Sizeof(i)),
 	)
-	log.Printf("ret: %v error: %v", ret, err)
+	if ret != 1 {
+		log.Printf("Failed to send keypress for keycode %d: unexpected return value %d", keyCode, ret)
+	} else {
+		log.Printf("Successfully sent keypress for keycode %d", keyCode)
+	}
 }
 
 type AppConfig struct {
@@ -94,6 +108,40 @@ func loadConfig() (*AppConfig, error) {
 	return &config, nil
 }
 
+func handleKeyPress(keyCode string) {
+	if vkCode, ok := vk.VirtualKeyCodes[keyCode]; ok {
+		keyPressOnce(vkCode)
+	} else {
+		log.Printf("Unknown key code: %s", keyCode)
+	}
+}
+
+type StatusLabel struct {
+	widget.Label
+	connected bool
+}
+
+func NewStatusLabel() *StatusLabel {
+	label := &StatusLabel{}
+	label.ExtendBaseWidget(label)
+	label.SetText("Offline")
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	label.Importance = widget.DangerImportance
+	return label
+}
+
+func (l *StatusLabel) SetConnected(connected bool) {
+	l.connected = connected
+	if connected {
+		l.SetText("Online")
+		l.Importance = widget.SuccessImportance
+	} else {
+		l.SetText("Offline")
+		l.Importance = widget.DangerImportance
+	}
+	l.Refresh()
+}
+
 func main() {
 	config, err := loadConfig()
 	if err != nil {
@@ -119,9 +167,14 @@ func main() {
 
 	label := widget.NewLabel("Audara Pre-MVP baby")
 	playButton := widget.NewButton("Play", func() {
-		keyPressOnce(vk.VK_MEDIA_PLAY_PAUSE)
+		keyPressOnce(vk.VirtualKeyCodes["VK_MEDIA_PLAY_PAUSE"])
 	})
 	playButton.Disable()
+
+	statusLabel := NewStatusLabel()
+
+	reconnectButton := widget.NewButton("Reconnect", nil)
+	reconnectButton.Hide()
 
 	userInfo := widget.NewLabel("")
 	authButton := widget.NewButton("Login", nil)
@@ -213,13 +266,22 @@ func main() {
 				return
 			}
 
-			// If verification didn't return profile data, use the token's profile
 			if userData.Profile.FirstName == "" {
 				userData.Profile = result.Token.Profile
 			}
 
-			// Initialize WebSocket client
-			wsClient = websocket.NewClient(config.App.Auth.WebappURL, result.Token.SessionToken)
+			wsClient = websocket.NewClient(config.App.Auth.WebappURL, result.Token.SessionToken, result.Token.UserID)
+			wsClient.SetKeyPressHandler(handleKeyPress)
+			wsClient.SetConnectionStatusHandler(func(connected bool) {
+				fyne.Do(func() {
+					statusLabel.SetConnected(connected)
+					if connected {
+						reconnectButton.Hide()
+					} else {
+						reconnectButton.Show()
+					}
+				})
+			})
 			if err := wsClient.Connect(); err != nil {
 				log.Printf("Error connecting to WebSocket: %v", err)
 			}
@@ -245,15 +307,34 @@ func main() {
 			playButton.Enable()
 		})
 
-		// Initialize WebSocket client for existing token
-		wsClient = websocket.NewClient(config.App.Auth.WebappURL, token.SessionToken)
+		wsClient = websocket.NewClient(config.App.Auth.WebappURL, token.SessionToken, token.UserID)
+		wsClient.SetKeyPressHandler(handleKeyPress)
+		wsClient.SetConnectionStatusHandler(func(connected bool) {
+			fyne.Do(func() {
+				statusLabel.SetConnected(connected)
+				if connected {
+					reconnectButton.Hide()
+				} else {
+					reconnectButton.Show()
+				}
+			})
+		})
 		if err := wsClient.Connect(); err != nil {
 			log.Printf("Error connecting to WebSocket: %v", err)
 		}
 	}
 
+	reconnectButton.OnTapped = func() {
+		if wsClient != nil {
+			if err := wsClient.Connect(); err != nil {
+				log.Printf("Error reconnecting to WebSocket: %v", err)
+			}
+		}
+	}
+
 	content := container.NewVBox(
 		label,
+		container.NewHBox(statusLabel, reconnectButton),
 		container.NewHBox(userInfo, loadingLabel, authButton),
 		playButton,
 	)

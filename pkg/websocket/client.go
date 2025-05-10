@@ -4,17 +4,23 @@ import (
 	"encoding/json"
 	"log"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type Client struct {
-	conn      *websocket.Conn
-	done      chan struct{}
-	send      chan []byte
-	webappURL string
-	token     string
+	conn       *websocket.Conn
+	done       chan struct{}
+	send       chan []byte
+	webappURL  string
+	token      string
+	userID     string
+	onKeyPress func(string)
+	onStatus   func(bool)
+	closed     bool
+	mu         sync.Mutex
 }
 
 type Message struct {
@@ -23,16 +29,39 @@ type Message struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-func NewClient(webappURL, token string) *Client {
+type KeyCodeMessage struct {
+	Type    string `json:"type"`
+	KeyCode string `json:"keyCode"`
+	UserID  string `json:"userId"`
+}
+
+func NewClient(webappURL, token, userID string) *Client {
 	return &Client{
 		done:      make(chan struct{}),
 		send:      make(chan []byte, 256),
 		webappURL: webappURL,
 		token:     token,
+		userID:    userID,
 	}
 }
 
+func (c *Client) SetKeyPressHandler(handler func(string)) {
+	c.onKeyPress = handler
+}
+
+func (c *Client) SetConnectionStatusHandler(handler func(bool)) {
+	c.onStatus = handler
+}
+
 func (c *Client) Connect() error {
+	if c.conn != nil {
+		c.Close()
+	}
+
+	c.done = make(chan struct{})
+	c.send = make(chan []byte, 256)
+	c.closed = false
+
 	u, err := url.Parse(c.webappURL)
 	if err != nil {
 		return err
@@ -49,16 +78,20 @@ func (c *Client) Connect() error {
 
 	conn, _, err := dialer.Dial(u.String(), header)
 	if err != nil {
+		if c.onStatus != nil {
+			c.onStatus(false)
+		}
 		return err
 	}
 
 	c.conn = conn
+	if c.onStatus != nil {
+		c.onStatus(true)
+	}
 
-	// Start goroutines for reading and writing
 	go c.readPump()
 	go c.writePump()
 
-	// Send initial ping message
 	pingMsg := Message{
 		Type:    "command",
 		Command: "ping",
@@ -76,8 +109,19 @@ func (c *Client) Connect() error {
 
 func (c *Client) readPump() {
 	defer func() {
-		c.conn.Close()
-		close(c.done)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if !c.closed {
+			c.closed = true
+			if c.conn != nil {
+				c.conn.Close()
+			}
+			close(c.done)
+			if c.onStatus != nil {
+				c.onStatus(false)
+			}
+		}
 	}()
 
 	for {
@@ -89,8 +133,25 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Log the received message
 		log.Printf("Received WebSocket message: %s", string(message))
+
+		var msg KeyCodeMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			log.Printf("Error parsing message: %v", err)
+			log.Printf("Message: %s", string(message))
+			continue
+		}
+
+		if msg.Type == "keyCode" {
+			if msg.UserID != c.userID {
+				log.Printf("Received message from different user ID: %s (expected: %s)", msg.UserID, c.userID)
+				continue
+			}
+
+			if c.onKeyPress != nil {
+				c.onKeyPress(msg.KeyCode)
+			}
+		}
 	}
 }
 
@@ -114,6 +175,14 @@ func (c *Client) writePump() {
 }
 
 func (c *Client) Close() {
-	close(c.done)
-	c.conn.Close()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.closed {
+		c.closed = true
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		close(c.done)
+	}
 }
